@@ -1,0 +1,150 @@
+version: '3.8'
+
+services:
+  rabbitmq:
+    build:
+      context: .
+      dockerfile: Dockerfile.rabbitmq
+    ports:
+      - "5672:5672"   # AMQP port
+      - "15672:15672" # Management UI port
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:15672"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - data-pipeline-network
+
+  elasticsearch:
+    image: elasticsearch:8.9.0
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    volumes:
+      - elasticsearch-data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9200"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - data-pipeline-network
+
+  api_gateway:
+    build:
+      context: .
+      dockerfile: api_gateway/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - INGESTION_TEXT_URL=http://ingestion_text:8001
+      - INGESTION_TABULAR_URL=http://ingestion_tabular:8002
+      - INGESTION_JSON_URL=http://ingestion_json:8003
+      - INGESTION_FILE_URL=http://ingestion_file:8004
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - data-pipeline-network
+
+  ingestion_text:
+    build:
+      context: .
+      dockerfile: ingestion_text/Dockerfile
+    environment:
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+      - RABBITMQ_USER=guest
+      - RABBITMQ_PASS=guest
+      - RABBITMQ_QUEUE=raw_text_queue
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - data-pipeline-network
+
+  ingestion_tabular:
+    build:
+      context: .
+      dockerfile: ingestion_tabular/Dockerfile
+    environment:
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+      - RABBITMQ_USER=guest
+      - RABBITMQ_PASS=guest
+      - RABBITMQ_QUEUE=raw_text_queue
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - data-pipeline-network
+
+  ingestion_json:
+    build:
+      context: .
+      dockerfile: ingestion_json/Dockerfile
+    environment:
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+      - RABBITMQ_USER=guest
+      - RABBITMQ_PASS=guest
+      - RABBITMQ_QUEUE=raw_text_queue
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - data-pipeline-network
+
+  ingestion_file:
+    build:
+      context: .
+      dockerfile: ingestion_file/Dockerfile
+    environment:
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+      - RABBITMQ_USER=guest
+      - RABBITMQ_PASS=guest
+      - RABBITMQ_QUEUE=raw_text_queue
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - data-pipeline-network
+
+  processing_service:
+    build:
+      context: .
+      dockerfile: processing_service/Dockerfile
+    environment:
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+      - RABBITMQ_USER=guest
+      - RABBITMQ_PASS=guest
+      - RABBITMQ_QUEUE=raw_text_queue
+      - RABBITMQ_DLQ=dead_letter_queue
+      - ES_HOSTS=http://elasticsearch:9200
+      - ES_USER=elastic
+      - ES_PASS=changeme
+      - ES_INDEX=processed_texts
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+    networks:
+      - data-pipeline-network
+
+networks:
+  data-pipeline-network:
+    driver: bridge
+
+volumes:
+  elasticsearch-data:
