@@ -130,10 +130,11 @@ services:
       - RABBITMQ_PASS=guest
       - RABBITMQ_QUEUE=raw_text_queue
       - RABBITMQ_DLQ=dead_letter_queue
+      - RABBITMQ_OUTPUT_QUEUE=processed_text_queue
       - ES_HOSTS=http://elasticsearch:9200
       - ES_USER=elastic
       - ES_PASS=changeme
-      - ES_INDEX=processed_texts
+      - ES_INDEX=text_metadata
     depends_on:
       rabbitmq:
         condition: service_healthy

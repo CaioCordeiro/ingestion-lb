@@ -8,7 +8,7 @@ from typing import Any, Callable, Dict, Optional
 import pika
 from pika.exceptions import AMQPConnectionError, ChannelClosedByBroker
 
-from .schemas import RawTextMessage
+from .schemas import RawTextMessage, StandardizedTextMessage
 
 
 class RabbitMQProducer:
@@ -24,6 +24,7 @@ class RabbitMQProducer:
         username: str = "guest",
         password: str = "guest",
         queue_name: str = "raw_text_queue",
+        output_queue_name: str = "processed_text_queue",
         logger: Optional[logging.Logger] = None,
     ):
         self.host = host
@@ -31,6 +32,7 @@ class RabbitMQProducer:
         self.username = username
         self.password = password
         self.queue_name = queue_name
+        self.output_queue_name = output_queue_name
         self.logger = logger or logging.getLogger(__name__)
         self.connection = None
         self.channel = None
@@ -95,6 +97,24 @@ class RabbitMQProducer:
                     )
                     self.channel.queue_declare(queue=self.queue_name, durable=True)
 
+                # Declare the output queue for processed text
+                try:
+                    self.channel.queue_declare(
+                        queue=self.output_queue_name,
+                        durable=True,
+                        arguments={
+                            "x-dead-letter-exchange": "dead_letter_exchange",
+                            "x-dead-letter-routing-key": "dead_letter_queue",
+                        },
+                    )
+                except Exception as e:
+                    self.logger.warning(
+                        f"Output queue {self.output_queue_name} exists, declaring normally: {str(e)}"
+                    )
+                    self.channel.queue_declare(
+                        queue=self.output_queue_name, durable=True
+                    )
+
                 self.logger.info(f"Connected to RabbitMQ at {self.host}:{self.port}")
                 return True
 
@@ -111,12 +131,62 @@ class RabbitMQProducer:
                     )
                     return False
 
-    def publish_message(self, message: RawTextMessage) -> bool:
+    def publish_message(
+        self, message: RawTextMessage, queue_name: Optional[str] = None
+    ) -> bool:
         """
         Publish a message to the queue.
 
         Args:
             message: The RawTextMessage to publish
+
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        target_queue = queue_name or self.queue_name
+        if not self.connection or not self.channel or not self.connection.is_open:
+            if not self.connect():
+                return False
+
+        try:
+            # Convert message to JSON
+            message_json = message.model_dump_json()
+
+            # Publish the message
+            self.channel.basic_publish(
+                exchange="",
+                routing_key=target_queue,
+                body=message_json,
+                properties=pika.BasicProperties(
+                    delivery_mode=2,  # Make message persistent
+                    content_type="application/json",
+                    message_id=str(uuid.uuid4()),
+                    timestamp=int(datetime.now().timestamp()),
+                    headers={"correlation_id": message.correlation_id},
+                ),
+            )
+
+            self.logger.info(
+                f"Published message to {target_queue}",
+                extra={"correlation_id": message.correlation_id},
+            )
+            return True
+
+        except Exception as e:
+            self.logger.error(
+                f"Failed to publish message: {str(e)}",
+                extra={"correlation_id": message.correlation_id},
+            )
+            # Try to reconnect for next message
+            self.connect()
+            return False
+
+    def publish_standardized_message(self, message: StandardizedTextMessage) -> bool:
+        """
+        Publish a standardized message to the output queue.
+
+        Args:
+            message: The StandardizedTextMessage to publish
 
         Returns:
             bool: True if successful, False otherwise
@@ -129,29 +199,35 @@ class RabbitMQProducer:
             # Convert message to JSON
             message_json = message.model_dump_json()
 
-            # Publish the message
+            # Publish the message to output queue
             self.channel.basic_publish(
                 exchange="",
-                routing_key=self.queue_name,
+                routing_key=self.output_queue_name,
                 body=message_json,
                 properties=pika.BasicProperties(
                     delivery_mode=2,  # Make message persistent
                     content_type="application/json",
                     message_id=str(uuid.uuid4()),
                     timestamp=int(datetime.now().timestamp()),
-                    headers={"correlation_id": message.correlation_id},
+                    headers={
+                        "correlation_id": message.correlation_id,
+                        "document_id": message.document_id,
+                    },
                 ),
             )
 
             self.logger.info(
-                f"Published message to {self.queue_name}",
-                extra={"correlation_id": message.correlation_id},
+                f"Published standardized message to {self.output_queue_name}",
+                extra={
+                    "correlation_id": message.correlation_id,
+                    "document_id": message.document_id,
+                },
             )
             return True
 
         except Exception as e:
             self.logger.error(
-                f"Failed to publish message: {str(e)}",
+                f"Failed to publish standardized message: {str(e)}",
                 extra={"correlation_id": message.correlation_id},
             )
             # Try to reconnect for next message

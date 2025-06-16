@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional
 from elasticsearch import Elasticsearch
 from elasticsearch import exceptions as es_exceptions
 
-from .schemas import StandardizedTextMessage
+from .schemas import TextMetadata
 
 
 class ElasticsearchClient:
@@ -19,7 +19,7 @@ class ElasticsearchClient:
         hosts: List[str] = ["http://elasticsearch:9200"],
         username: str = "elastic",
         password: str = "changeme",
-        index_name: str = "processed_texts",
+        index_name: str = "text_metadata",
         logger: Optional[logging.Logger] = None,
     ):
         self.hosts = hosts
@@ -83,11 +83,16 @@ class ElasticsearchClient:
             mappings = {
                 "mappings": {
                     "properties": {
+                        "document_id": {"type": "keyword"},
                         "correlation_id": {"type": "keyword"},
                         "source_system": {"type": "keyword"},
                         "source_identifier": {"type": "keyword"},
                         "ingestion_timestamp_utc": {"type": "date"},
-                        "processed_text": {"type": "text", "analyzer": "standard"},
+                        "processing_timestamp_utc": {"type": "date"},
+                        "text_length": {"type": "integer"},
+                        "processing_status": {"type": "keyword"},
+                        "error_message": {"type": "text"},
+                        "additional_metadata": {"type": "object", "enabled": False},
                     }
                 },
                 "settings": {"number_of_shards": 1, "number_of_replicas": 0},
@@ -104,12 +109,12 @@ class ElasticsearchClient:
             else:
                 raise
 
-    def index_document(self, document: StandardizedTextMessage) -> bool:
+    def index_metadata(self, metadata: TextMetadata) -> bool:
         """
-        Index a document in Elasticsearch.
+        Index metadata in Elasticsearch.
 
         Args:
-            document: The StandardizedTextMessage to index
+            metadata: The TextMetadata to index
 
         Returns:
             bool: True if indexing was successful, False otherwise
@@ -119,24 +124,27 @@ class ElasticsearchClient:
                 return False
 
         try:
-            # Convert document to dict
-            doc_dict = document.model_dump()
+            # Convert metadata to dict
+            doc_dict = metadata.model_dump()
 
-            # Index the document
+            # Index the metadata
             response = self.client.index(
-                index=self.index_name, document=doc_dict, id=document.correlation_id
+                index=self.index_name, document=doc_dict, id=metadata.document_id
             )
 
             self.logger.info(
-                f"Indexed document with ID: {response['_id']}",
-                extra={"correlation_id": document.correlation_id},
+                f"Indexed metadata with ID: {response['_id']}",
+                extra={
+                    "correlation_id": metadata.correlation_id,
+                    "document_id": metadata.document_id,
+                },
             )
             return True
 
         except es_exceptions.ConnectionError:
             self.logger.error(
                 "Lost connection to Elasticsearch. Attempting to reconnect...",
-                extra={"correlation_id": document.correlation_id},
+                extra={"correlation_id": metadata.correlation_id},
             )
             # Try to reconnect
             self.connect()
@@ -144,8 +152,8 @@ class ElasticsearchClient:
 
         except Exception as e:
             self.logger.error(
-                f"Failed to index document: {str(e)}",
-                extra={"correlation_id": document.correlation_id},
+                f"Failed to index metadata: {str(e)}",
+                extra={"correlation_id": metadata.correlation_id},
             )
             return False
 

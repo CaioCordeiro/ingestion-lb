@@ -4,6 +4,7 @@ import os
 import re
 import sys
 import time
+import uuid
 from datetime import datetime
 from typing import Any, Dict
 
@@ -11,8 +12,8 @@ from typing import Any, Dict
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from shared.elasticsearch_client import ElasticsearchClient
 from shared.logging_config import configure_logger
-from shared.rabbitmq import RabbitMQConsumer
-from shared.schemas import StandardizedTextMessage
+from shared.rabbitmq import RabbitMQConsumer, RabbitMQProducer
+from shared.schemas import StandardizedTextMessage, TextMetadata
 
 # Configure logger
 logger = configure_logger("processing_service")
@@ -24,12 +25,13 @@ RABBITMQ_USER = os.getenv("RABBITMQ_USER", "guest")
 RABBITMQ_PASS = os.getenv("RABBITMQ_PASS", "guest")
 RABBITMQ_QUEUE = os.getenv("RABBITMQ_QUEUE", "raw_text_queue")
 RABBITMQ_DLQ = os.getenv("RABBITMQ_DLQ", "dead_letter_queue")
+RABBITMQ_OUTPUT_QUEUE = os.getenv("RABBITMQ_OUTPUT_QUEUE", "processed_text_queue")
 logger.info(f"RabbitMQ DLQ: {RABBITMQ_DLQ}")
 # Elasticsearch configuration
 ES_HOSTS = os.getenv("ES_HOSTS", "http://elasticsearch:9200").split(",")
 ES_USER = os.getenv("ES_USER", "elastic")
 ES_PASS = os.getenv("ES_PASS", "changeme")
-ES_INDEX = os.getenv("ES_INDEX", "processed_texts")
+ES_INDEX = os.getenv("ES_INDEX", "text_metadata")
 
 
 def clean_text(text: str) -> str:
@@ -57,7 +59,11 @@ def clean_text(text: str) -> str:
     return text
 
 
-def process_message(message_data: Dict[str, Any], client: ElasticsearchClient) -> bool:
+def process_message(
+    message_data: Dict[str, Any],
+    es_client: ElasticsearchClient,
+    rabbitmq_producer: RabbitMQProducer,
+) -> bool:
     """
     Process a message from RabbitMQ.
 
@@ -67,6 +73,7 @@ def process_message(message_data: Dict[str, Any], client: ElasticsearchClient) -
     Returns:
         bool: True if processing was successful, False otherwise
     """
+    document_id = str(uuid.uuid4())
     try:
         # Extract correlation ID for logging
         correlation_id = message_data.get("correlation_id", "unknown")
@@ -77,6 +84,25 @@ def process_message(message_data: Dict[str, Any], client: ElasticsearchClient) -
         raw_text = message_data.get("raw_text", "")
 
         if not raw_text:
+            # Create metadata for failed processing
+            metadata = TextMetadata(
+                document_id=document_id,
+                correlation_id=correlation_id,
+                source_system=message_data.get("source_system", "unknown"),
+                source_identifier=message_data.get("source_identifier"),
+                ingestion_timestamp_utc=datetime.fromisoformat(
+                    message_data.get("ingestion_timestamp_utc")
+                ),
+                processing_timestamp_utc=datetime.utcnow(),
+                text_length=0,
+                processing_status="failed",
+                error_message="Empty text content in message",
+                additional_metadata={"original_message": message_data},
+            )
+
+            # Store metadata in Elasticsearch
+            es_client.index_metadata(metadata)
+
             logger.warning(
                 "Empty text content in message",
                 extra={"correlation_id": correlation_id},
@@ -85,35 +111,102 @@ def process_message(message_data: Dict[str, Any], client: ElasticsearchClient) -
 
         # Clean the text
         processed_text = clean_text(raw_text)
+        processing_timestamp = datetime.utcnow()
 
         # Create a standardized message
         standardized_message = StandardizedTextMessage(
+            document_id=document_id,
             correlation_id=correlation_id,
             source_system=message_data.get("source_system", "unknown"),
             source_identifier=message_data.get("source_identifier"),
             ingestion_timestamp_utc=datetime.fromisoformat(
                 message_data.get("ingestion_timestamp_utc")
             ),
+            processing_timestamp_utc=processing_timestamp,
             processed_text=processed_text,
         )
 
-        # Index the message in Elasticsearch
-        success = client.index_document(standardized_message)
+        # Create metadata for Elasticsearch
+        metadata = TextMetadata(
+            document_id=document_id,
+            correlation_id=correlation_id,
+            source_system=message_data.get("source_system", "unknown"),
+            source_identifier=message_data.get("source_identifier"),
+            ingestion_timestamp_utc=datetime.fromisoformat(
+                message_data.get("ingestion_timestamp_utc")
+            ),
+            processing_timestamp_utc=processing_timestamp,
+            text_length=len(processed_text),
+            processing_status="success",
+            error_message=None,
+            additional_metadata={
+                "original_text_length": len(raw_text),
+                "processing_duration_ms": int(
+                    (
+                        processing_timestamp
+                        - datetime.fromisoformat(
+                            message_data.get("ingestion_timestamp_utc")
+                        )
+                    ).total_seconds()
+                    * 1000
+                ),
+            },
+        )
 
-        if success:
+        # Publish processed text to output queue
+        text_published = rabbitmq_producer.publish_standardized_message(
+            standardized_message
+        )
+
+        # Store metadata in Elasticsearch
+        metadata_stored = es_client.index_metadata(metadata)
+
+        if text_published and metadata_stored:
             logger.info(
-                "Message processed and indexed successfully",
-                extra={"correlation_id": correlation_id},
+                "Message processed, published to output queue, and metadata stored successfully",
+                extra={"correlation_id": correlation_id, "document_id": document_id},
             )
             return True
         else:
+            # Update metadata to reflect partial failure
+            if not text_published:
+                metadata.processing_status = "failed"
+                metadata.error_message = "Failed to publish to output queue"
+            elif not metadata_stored:
+                metadata.processing_status = "partial_success"
+                metadata.error_message = "Failed to store metadata in Elasticsearch"
+
+            # Try to store updated metadata
+            es_client.index_metadata(metadata)
+
             logger.error(
-                "Failed to index message in Elasticsearch",
-                extra={"correlation_id": correlation_id},
+                f"Failed to fully process message - text_published: {text_published}, metadata_stored: {metadata_stored}",
+                extra={"correlation_id": correlation_id, "document_id": document_id},
             )
             return False
 
     except KeyError as e:
+        # Create metadata for failed processing
+        metadata = TextMetadata(
+            document_id=document_id,
+            correlation_id=message_data.get("correlation_id", "unknown"),
+            source_system=message_data.get("source_system", "unknown"),
+            source_identifier=message_data.get("source_identifier"),
+            ingestion_timestamp_utc=datetime.fromisoformat(
+                message_data.get(
+                    "ingestion_timestamp_utc", datetime.utcnow().isoformat()
+                )
+            ),
+            processing_timestamp_utc=datetime.utcnow(),
+            text_length=0,
+            processing_status="failed",
+            error_message=f"Missing required field: {str(e)}",
+            additional_metadata={"original_message": message_data},
+        )
+
+        # Store metadata in Elasticsearch
+        es_client.index_metadata(metadata)
+
         logger.error(
             f"Missing required field in message: {str(e)}",
             extra={"correlation_id": message_data.get("correlation_id", "unknown")},
@@ -121,20 +214,62 @@ def process_message(message_data: Dict[str, Any], client: ElasticsearchClient) -
         return False
 
     except Exception as e:
+        # Create metadata for failed processing
+        try:
+            metadata = TextMetadata(
+                document_id=document_id,
+                correlation_id=message_data.get("correlation_id", "unknown"),
+                source_system=message_data.get("source_system", "unknown"),
+                source_identifier=message_data.get("source_identifier"),
+                ingestion_timestamp_utc=datetime.fromisoformat(
+                    message_data.get(
+                        "ingestion_timestamp_utc", datetime.utcnow().isoformat()
+                    )
+                ),
+                processing_timestamp_utc=datetime.utcnow(),
+                text_length=len(message_data.get("raw_text", "")),
+                processing_status="failed",
+                error_message=str(e),
+                additional_metadata={"original_message": message_data},
+            )
+
+            # Store metadata in Elasticsearch
+            es_client.index_metadata(metadata)
+        except Exception as meta_error:
+            logger.error(f"Failed to store error metadata: {str(meta_error)}")
+
         logger.error(
             f"Error processing message: {str(e)}",
-            extra={"correlation_id": message_data.get("correlation_id", "unknown")},
+            extra={
+                "correlation_id": message_data.get("correlation_id", "unknown"),
+                "document_id": document_id,
+            },
         )
         return False
 
 
-def main(client: ElasticsearchClient):
+def main(es_client: ElasticsearchClient):
     """Main function to run the processing service."""
     logger.info("Starting Processing Service")
 
     # Connect to Elasticsearch
-    if not client.connect():
+    if not es_client.connect():
         logger.error("Failed to connect to Elasticsearch. Exiting.")
+        sys.exit(1)
+
+    # Create RabbitMQ producer for output queue
+    rabbitmq_producer = RabbitMQProducer(
+        host=RABBITMQ_HOST,
+        port=RABBITMQ_PORT,
+        username=RABBITMQ_USER,
+        password=RABBITMQ_PASS,
+        queue_name=RABBITMQ_QUEUE,
+        output_queue_name=RABBITMQ_OUTPUT_QUEUE,
+        logger=logger,
+    )
+
+    if not rabbitmq_producer.connect():
+        logger.error("Failed to connect to RabbitMQ producer. Exiting.")
         sys.exit(1)
 
     # Connect to RabbitMQ and start consuming messages
@@ -152,11 +287,11 @@ def main(client: ElasticsearchClient):
         logger.error("Failed to connect to RabbitMQ. Exiting.")
         sys.exit(1)
 
-    # Create a wrapper function that includes the Elasticsearch client
+    # Create a wrapper function that includes the clients
     def message_callback(message_data: Dict[str, Any]) -> bool:
         # Log the raw message data
         logger.info(f"Received message: {message_data}")
-        return process_message(message_data, client)
+        return process_message(message_data, es_client, rabbitmq_producer)
 
     try:
         # Start consuming messages
@@ -172,7 +307,8 @@ def main(client: ElasticsearchClient):
     finally:
         # Close connections
         rabbitmq_consumer.close()
-        client.close()
+        rabbitmq_producer.close()
+        es_client.close()
         logger.info("Processing Service shut down")
 
 
