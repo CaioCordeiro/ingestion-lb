@@ -1,10 +1,9 @@
-import logging
 import os
 import sys
 import uuid
 from datetime import datetime
 
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -79,9 +78,7 @@ async def ingest_text(request: TextRequest, x_correlation_id: str = Header(None)
     # Use provided correlation ID or generate a new one
     correlation_id = x_correlation_id or str(uuid.uuid4())
 
-    logger.info(
-        "Processing text ingestion request", extra={"correlation_id": correlation_id}
-    )
+    logger.info("Processing text ingestion request", extra={"correlation_id": correlation_id})
 
     try:
         # Create a raw text message
@@ -97,9 +94,7 @@ async def ingest_text(request: TextRequest, x_correlation_id: str = Header(None)
         success = rabbitmq_producer.publish_message(message)
 
         if success:
-            logger.info(
-                "Text ingestion successful", extra={"correlation_id": correlation_id}
-            )
+            logger.info("Text ingestion successful", extra={"correlation_id": correlation_id})
             return JSONResponse(
                 status_code=200,
                 content={
@@ -113,18 +108,20 @@ async def ingest_text(request: TextRequest, x_correlation_id: str = Header(None)
                 "Failed to publish message to RabbitMQ",
                 extra={"correlation_id": correlation_id},
             )
-            raise HTTPException(
-                status_code=500, detail="Failed to process text ingestion"
-            )
+            raise HTTPException(status_code=500, detail="Failed to process text ingestion")
 
     except Exception as e:
         logger.error(
             f"Error processing text ingestion: {str(e)}",
             extra={"correlation_id": correlation_id},
         )
-        raise HTTPException(
-            status_code=500, detail=f"Error processing text ingestion: {str(e)}"
-        )
+        if hasattr(e, "detail"):
+            # If the exception has a 'details' attribute, use it for more context
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error processing text ingestion: {str(e.detail)}",
+            )
+        raise HTTPException(status_code=500, detail=f"Error processing text ingestion: {str(e)}")
 
 
 @app.get("/health")

@@ -1,9 +1,6 @@
-import json
-import logging
 import os
 import re
 import sys
-import time
 import uuid
 from datetime import datetime
 from typing import Any, Dict
@@ -82,7 +79,29 @@ def process_message(
 
         # Extract raw text
         raw_text = message_data.get("raw_text", "")
+        if not isinstance(message_data.get("ingestion_timestamp_utc"), str):
+            # Create metadata for failed processing
+            metadata = TextMetadata(
+                document_id=document_id,
+                correlation_id=correlation_id,
+                source_system=message_data.get("source_system", "unknown"),
+                source_identifier=message_data.get("source_identifier"),
+                ingestion_timestamp_utc=datetime.utcnow(),
+                processing_timestamp_utc=datetime.utcnow(),
+                text_length=0,
+                processing_status="failed",
+                error_message="No valid ingestion timestamp found in message",
+                additional_metadata={"original_message": message_data},
+            )
 
+            # Store metadata in Elasticsearch
+            es_client.index_metadata(metadata)
+
+            logger.warning(
+                "No valid ingestion timestamp found in message",
+                extra={"correlation_id": correlation_id},
+            )
+            return False
         if not raw_text:
             # Create metadata for failed processing
             metadata = TextMetadata(
@@ -144,9 +163,7 @@ def process_message(
                 "processing_duration_ms": int(
                     (
                         processing_timestamp
-                        - datetime.fromisoformat(
-                            message_data.get("ingestion_timestamp_utc")
-                        )
+                        - datetime.fromisoformat(message_data.get("ingestion_timestamp_utc"))
                     ).total_seconds()
                     * 1000
                 ),
@@ -154,9 +171,7 @@ def process_message(
         )
 
         # Publish processed text to output queue
-        text_published = rabbitmq_producer.publish_standardized_message(
-            standardized_message
-        )
+        text_published = rabbitmq_producer.publish_standardized_message(standardized_message)
 
         # Store metadata in Elasticsearch
         metadata_stored = es_client.index_metadata(metadata)
@@ -193,9 +208,7 @@ def process_message(
             source_system=message_data.get("source_system", "unknown"),
             source_identifier=message_data.get("source_identifier"),
             ingestion_timestamp_utc=datetime.fromisoformat(
-                message_data.get(
-                    "ingestion_timestamp_utc", datetime.utcnow().isoformat()
-                )
+                message_data.get("ingestion_timestamp_utc", datetime.utcnow().isoformat())
             ),
             processing_timestamp_utc=datetime.utcnow(),
             text_length=0,
@@ -222,9 +235,7 @@ def process_message(
                 source_system=message_data.get("source_system", "unknown"),
                 source_identifier=message_data.get("source_identifier"),
                 ingestion_timestamp_utc=datetime.fromisoformat(
-                    message_data.get(
-                        "ingestion_timestamp_utc", datetime.utcnow().isoformat()
-                    )
+                    message_data.get("ingestion_timestamp_utc", datetime.utcnow().isoformat())
                 ),
                 processing_timestamp_utc=datetime.utcnow(),
                 text_length=len(message_data.get("raw_text", "")),

@@ -1,5 +1,4 @@
 import json
-import logging
 import os
 import sys
 import uuid
@@ -114,9 +113,7 @@ async def ingest_json(request: Request, x_correlation_id: str = Header(None)):
     # Use provided correlation ID or generate a new one
     correlation_id = x_correlation_id or str(uuid.uuid4())
 
-    logger.info(
-        "Processing JSON ingestion request", extra={"correlation_id": correlation_id}
-    )
+    logger.info("Processing JSON ingestion request", extra={"correlation_id": correlation_id})
 
     try:
         # Parse the JSON data
@@ -177,9 +174,7 @@ async def ingest_json(request: Request, x_correlation_id: str = Header(None)):
                 "Failed to publish message to RabbitMQ",
                 extra={"correlation_id": correlation_id},
             )
-            raise HTTPException(
-                status_code=500, detail="Failed to process JSON ingestion"
-            )
+            raise HTTPException(status_code=500, detail="Failed to process JSON ingestion")
 
     except json.JSONDecodeError:
         logger.error("Invalid JSON format", extra={"correlation_id": correlation_id})
@@ -193,9 +188,13 @@ async def ingest_json(request: Request, x_correlation_id: str = Header(None)):
             f"Error processing JSON ingestion: {str(e)}",
             extra={"correlation_id": correlation_id},
         )
-        raise HTTPException(
-            status_code=500, detail=f"Error processing JSON ingestion: {str(e)}"
-        )
+        if hasattr(e, "detail"):
+            # If the exception has a 'details' attribute, use it for more context
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error processing JSON ingestion: {str(e.detail)}",
+            )
+        raise HTTPException(status_code=500, detail=f"Error processing JSON ingestion: {str(e)}")
 
 
 @app.get("/health")

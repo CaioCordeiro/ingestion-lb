@@ -1,10 +1,8 @@
 import io
-import logging
 import os
 import sys
 import uuid
 from datetime import datetime
-from typing import Optional
 
 from fastapi import FastAPI, File, Header, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
@@ -124,9 +122,7 @@ async def extract_text_from_docx(file_content: bytes) -> str:
 
 # Routes
 @app.post("/ingest")
-async def ingest_file(
-    file: UploadFile = File(...), x_correlation_id: str = Header(None)
-):
+async def ingest_file(file: UploadFile = File(...), x_correlation_id: str = Header(None)):
     """
     Ingest PDF or DOCX file, extract text, and publish to RabbitMQ.
 
@@ -219,18 +215,20 @@ async def ingest_file(
                 "Failed to publish message to RabbitMQ",
                 extra={"correlation_id": correlation_id},
             )
-            raise HTTPException(
-                status_code=500, detail="Failed to process file ingestion"
-            )
+            raise HTTPException(status_code=500, detail="Failed to process file ingestion")
 
     except Exception as e:
         logger.error(
             f"Error processing file ingestion: {str(e)}",
             extra={"correlation_id": correlation_id},
         )
-        raise HTTPException(
-            status_code=500, detail=f"Error processing file ingestion: {str(e)}"
-        )
+        if hasattr(e, "detail"):
+            # If the exception has a 'details' attribute, use it for more context
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error processing file ingestion: {str(e.detail)}",
+            )
+        raise HTTPException(status_code=500, detail=f"Error processing file ingestion: {str(e)}")
 
 
 @app.get("/health")

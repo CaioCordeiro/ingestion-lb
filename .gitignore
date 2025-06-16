@@ -28,3 +28,6 @@ __pycache__/
 *.swp
 *.swo
 *.bak
+.coverage
+*.coverage.*
+htmlcov
