@@ -284,3 +284,29 @@ python -m pytest tests/ -v --cov=. --cov-report=xml --cov-report=term
 # Generate coverage badge (if using coverage badge tools)
 coverage-badge -o coverage.svg
 ```
+
+## Implementing Kubernetes
+
+### Setting up the Kubernetes Cluster
+
+You can set up a cluster automatically using *k3s*: `curl -sfL https://get.k3s.io | sh -`. The script installs and writes a kubeconfig file on `/etc/rancher/k3s/k3s.yaml`, which you can copy to a local context on `$HOME/.kube/config` (*i.e*, dispensing the need to run `k3s` on every command) with:
+```bash
+kubectl config view > ~/.kube/config
+
+# You should now export kubeconfig to your environment variables (~/.profile)
+echo "export KUBECONFIG=~/.kube/config" >> ~/.profile
+```
+Log out and back in your machine, cli should be working as intended. Note that this requires standard Kubernetes installed for *kubelet* to work.
+
+In order to reset the cluster, you need to restart the process with `systemctl stop k3s` and `systemctl start k3s`.
+
+### Creating Deployments and Services
+
+#### Step-by-step guide
+
+For each application you wish to break down into images and deploy, run `kubectl create deploy SECTOR-APPNAME --port=PORT --image=registry.k8s.io/e2e-test-images/agnhost:2.39`. If you wish to generate a file, append `-o yaml > FILENAME.yaml`. In this example, agnhost is a general image used for debugging related topics.
+If you wish to set the port, use `kubectl set env deployment/data-api-gateway PORT=PORT-NUMBER`. I recommend changing later to envFROM.
+
+#### From generated YAML
+Alternatively, you can just copy the manifest and run:
+`kubectl apply -f manifest-name.yml`. If you wish to merge manifests, simply add `---` in a newline and continue from below.
