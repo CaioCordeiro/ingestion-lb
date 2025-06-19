@@ -1,10 +1,8 @@
-import logging
 import os
 import sys
 import uuid
 from datetime import datetime
 from io import StringIO
-from typing import List
 
 import pandas as pd
 from fastapi import FastAPI, File, Header, HTTPException, UploadFile
@@ -62,9 +60,7 @@ async def shutdown_event():
 
 # Routes
 @app.post("/ingest")
-async def ingest_csv(
-    file: UploadFile = File(...), x_correlation_id: str = Header(None)
-):
+async def ingest_csv(file: UploadFile = File(...), x_correlation_id: str = Header(None)):
     """
     Ingest CSV data, extract text from each row, and publish to RabbitMQ.
 
@@ -83,7 +79,7 @@ async def ingest_csv(
         extra={"correlation_id": correlation_id},
     )
 
-    if not file.filename.endswith(".csv"):
+    if not file.filename.lower().endswith(".csv"):
         logger.warning(
             f"Invalid file format: {file.filename}. Expected CSV.",
             extra={"correlation_id": correlation_id},
@@ -110,9 +106,7 @@ async def ingest_csv(
         for index, row in df.iterrows():
             try:
                 # Concatenate all columns into a single text string
-                row_text = " ".join(
-                    str(value) for value in row.values if pd.notna(value)
-                )
+                row_text = " ".join(str(value) for value in row.values if pd.notna(value))
 
                 # Create a unique correlation ID for each row based on the main correlation ID
                 row_correlation_id = f"{correlation_id}-row-{index}"
@@ -159,9 +153,7 @@ async def ingest_csv(
         )
 
     except pd.errors.EmptyDataError:
-        logger.error(
-            f"Empty CSV file: {file.filename}", extra={"correlation_id": correlation_id}
-        )
+        logger.error(f"Empty CSV file: {file.filename}", extra={"correlation_id": correlation_id})
         raise HTTPException(status_code=400, detail="The CSV file is empty.")
 
     except pd.errors.ParserError:
@@ -179,9 +171,7 @@ async def ingest_csv(
             f"Error processing CSV ingestion: {str(e)}",
             extra={"correlation_id": correlation_id},
         )
-        raise HTTPException(
-            status_code=500, detail=f"Error processing CSV ingestion: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Error processing CSV ingestion: {str(e)}")
 
 
 @app.get("/health")
