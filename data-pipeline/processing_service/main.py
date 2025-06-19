@@ -23,12 +23,35 @@ RABBITMQ_PASS = os.getenv("RABBITMQ_PASS", "guest")
 RABBITMQ_QUEUE = os.getenv("RABBITMQ_QUEUE", "raw_text_queue")
 RABBITMQ_DLQ = os.getenv("RABBITMQ_DLQ", "dead_letter_queue")
 RABBITMQ_OUTPUT_QUEUE = os.getenv("RABBITMQ_OUTPUT_QUEUE", "processed_text_queue")
-logger.info(f"RabbitMQ DLQ: {RABBITMQ_DLQ}")
+logger.info("RabbitMQ DLQ: %s", RABBITMQ_DLQ)
 # Elasticsearch configuration
 ES_HOSTS = os.getenv("ES_HOSTS", "http://elasticsearch:9200").split(",")
 ES_USER = os.getenv("ES_USER", "elastic")
 ES_PASS = os.getenv("ES_PASS", "changeme")
 ES_INDEX = os.getenv("ES_INDEX", "text_metadata")
+
+
+def parse_ingestion_timestamp(message_data: Dict[str, Any]) -> datetime:
+    """
+    Parse ingestion timestamp from message data.
+
+    Args:
+        message_data: Message data containing ingestion_timestamp_utc
+
+    Returns:
+        Parsed datetime object
+
+    Raises:
+        ValueError: If timestamp is invalid or missing
+    """
+    timestamp_str = message_data.get("ingestion_timestamp_utc")
+    if not timestamp_str or not isinstance(timestamp_str, str):
+        raise ValueError("No valid ingestion timestamp found in message")
+
+    try:
+        return datetime.fromisoformat(timestamp_str)
+    except (ValueError, TypeError) as e:
+        raise ValueError(f"Invalid timestamp format: {timestamp_str}") from e
 
 
 def clean_text(text: str) -> str:
@@ -77,9 +100,10 @@ def process_message(
 
         logger.info("Processing message", extra={"correlation_id": correlation_id})
 
-        # Extract raw text
-        raw_text = message_data.get("raw_text", "")
-        if not isinstance(message_data.get("ingestion_timestamp_utc"), str):
+        # Parse ingestion timestamp early to validate message
+        try:
+            ingestion_timestamp = parse_ingestion_timestamp(message_data)
+        except ValueError as e:
             # Create metadata for failed processing
             metadata = TextMetadata(
                 document_id=document_id,
@@ -90,7 +114,7 @@ def process_message(
                 processing_timestamp_utc=datetime.utcnow(),
                 text_length=0,
                 processing_status="failed",
-                error_message="No valid ingestion timestamp found in message",
+                error_message=str(e),
                 additional_metadata={"original_message": message_data},
             )
 
@@ -98,10 +122,13 @@ def process_message(
             es_client.index_metadata(metadata)
 
             logger.warning(
-                "No valid ingestion timestamp found in message",
+                str(e),
                 extra={"correlation_id": correlation_id},
             )
             return False
+
+        # Extract raw text
+        raw_text = message_data.get("raw_text", "")
         if not raw_text:
             # Create metadata for failed processing
             metadata = TextMetadata(
@@ -109,9 +136,7 @@ def process_message(
                 correlation_id=correlation_id,
                 source_system=message_data.get("source_system", "unknown"),
                 source_identifier=message_data.get("source_identifier"),
-                ingestion_timestamp_utc=datetime.fromisoformat(
-                    message_data.get("ingestion_timestamp_utc")
-                ),
+                ingestion_timestamp_utc=ingestion_timestamp,
                 processing_timestamp_utc=datetime.utcnow(),
                 text_length=0,
                 processing_status="failed",
@@ -138,9 +163,7 @@ def process_message(
             correlation_id=correlation_id,
             source_system=message_data.get("source_system", "unknown"),
             source_identifier=message_data.get("source_identifier"),
-            ingestion_timestamp_utc=datetime.fromisoformat(
-                message_data.get("ingestion_timestamp_utc")
-            ),
+            ingestion_timestamp_utc=ingestion_timestamp,
             processing_timestamp_utc=processing_timestamp,
             processed_text=processed_text,
         )
@@ -151,9 +174,7 @@ def process_message(
             correlation_id=correlation_id,
             source_system=message_data.get("source_system", "unknown"),
             source_identifier=message_data.get("source_identifier"),
-            ingestion_timestamp_utc=datetime.fromisoformat(
-                message_data.get("ingestion_timestamp_utc")
-            ),
+            ingestion_timestamp_utc=ingestion_timestamp,
             processing_timestamp_utc=processing_timestamp,
             text_length=len(processed_text),
             processing_status="success",
@@ -161,11 +182,7 @@ def process_message(
             additional_metadata={
                 "original_text_length": len(raw_text),
                 "processing_duration_ms": int(
-                    (
-                        processing_timestamp
-                        - datetime.fromisoformat(message_data.get("ingestion_timestamp_utc"))
-                    ).total_seconds()
-                    * 1000
+                    (processing_timestamp - ingestion_timestamp).total_seconds() * 1000
                 ),
             },
         )
@@ -195,21 +212,24 @@ def process_message(
             es_client.index_metadata(metadata)
 
             logger.error(
-                f"Failed to fully process message - text_published: {text_published}, metadata_stored: {metadata_stored}",
+                "Failed to fully process message - text_published: %s, metadata_stored: %s",
+                text_published,
+                metadata_stored,
                 extra={"correlation_id": correlation_id, "document_id": document_id},
             )
             return False
 
     except KeyError as e:
+        # Use current time as fallback for ingestion timestamp in error cases
+        fallback_timestamp = datetime.utcnow()
+
         # Create metadata for failed processing
         metadata = TextMetadata(
             document_id=document_id,
             correlation_id=message_data.get("correlation_id", "unknown"),
             source_system=message_data.get("source_system", "unknown"),
             source_identifier=message_data.get("source_identifier"),
-            ingestion_timestamp_utc=datetime.fromisoformat(
-                message_data.get("ingestion_timestamp_utc", datetime.utcnow().isoformat())
-            ),
+            ingestion_timestamp_utc=fallback_timestamp,
             processing_timestamp_utc=datetime.utcnow(),
             text_length=0,
             processing_status="failed",
@@ -221,12 +241,16 @@ def process_message(
         es_client.index_metadata(metadata)
 
         logger.error(
-            f"Missing required field in message: {str(e)}",
+            "Missing required field in message: %s",
+            str(e),
             extra={"correlation_id": message_data.get("correlation_id", "unknown")},
         )
         return False
 
     except Exception as e:
+        # Use current time as fallback for ingestion timestamp in error cases
+        fallback_timestamp = datetime.utcnow()
+
         # Create metadata for failed processing
         try:
             metadata = TextMetadata(
@@ -234,9 +258,7 @@ def process_message(
                 correlation_id=message_data.get("correlation_id", "unknown"),
                 source_system=message_data.get("source_system", "unknown"),
                 source_identifier=message_data.get("source_identifier"),
-                ingestion_timestamp_utc=datetime.fromisoformat(
-                    message_data.get("ingestion_timestamp_utc", datetime.utcnow().isoformat())
-                ),
+                ingestion_timestamp_utc=fallback_timestamp,
                 processing_timestamp_utc=datetime.utcnow(),
                 text_length=len(message_data.get("raw_text", "")),
                 processing_status="failed",
@@ -247,10 +269,11 @@ def process_message(
             # Store metadata in Elasticsearch
             es_client.index_metadata(metadata)
         except Exception as meta_error:
-            logger.error(f"Failed to store error metadata: {str(meta_error)}")
+            logger.error("Failed to store error metadata: %s", str(meta_error))
 
         logger.error(
-            f"Error processing message: {str(e)}",
+            "Error processing message: %s",
+            str(e),
             extra={
                 "correlation_id": message_data.get("correlation_id", "unknown"),
                 "document_id": document_id,
@@ -301,19 +324,19 @@ def main(es_client: ElasticsearchClient):
     # Create a wrapper function that includes the clients
     def message_callback(message_data: Dict[str, Any]) -> bool:
         # Log the raw message data
-        logger.info(f"Received message: {message_data}")
+        logger.info("Received message: %s", message_data)
         return process_message(message_data, es_client, rabbitmq_producer)
 
     try:
         # Start consuming messages
-        logger.info(f"Consuming messages from queue: {RABBITMQ_QUEUE}")
+        logger.info("Consuming messages from queue: %s", RABBITMQ_QUEUE)
         rabbitmq_consumer.start_consuming(message_callback)
 
     except KeyboardInterrupt:
         logger.info("Processing Service stopped by user")
 
     except Exception as e:
-        logger.error(f"Processing Service stopped due to error: {str(e)}")
+        logger.error("Processing Service stopped due to error: %s", str(e))
 
     finally:
         # Close connections

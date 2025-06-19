@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any, Callable, Dict, Optional
 
 import pika
-from pika.exceptions import AMQPConnectionError, ChannelClosedByBroker
+from pika.exceptions import AMQPConnectionError
 
 from .schemas import RawTextMessage, StandardizedTextMessage
 
@@ -111,9 +111,7 @@ class RabbitMQProducer:
                     self.logger.warning(
                         f"Output queue {self.output_queue_name} exists, declaring normally: {str(e)}"
                     )
-                    self.channel.queue_declare(
-                        queue=self.output_queue_name, durable=True
-                    )
+                    self.channel.queue_declare(queue=self.output_queue_name, durable=True)
 
                 self.logger.info(f"Connected to RabbitMQ at {self.host}:{self.port}")
                 return True
@@ -126,14 +124,10 @@ class RabbitMQProducer:
                 if retry_count < max_retries:
                     time.sleep(retry_delay)
                 else:
-                    self.logger.error(
-                        "Max retries reached. Could not connect to RabbitMQ."
-                    )
+                    self.logger.error("Max retries reached. Could not connect to RabbitMQ.")
                     return False
 
-    def publish_message(
-        self, message: RawTextMessage, queue_name: Optional[str] = None
-    ) -> bool:
+    def publish_message(self, message: RawTextMessage, queue_name: Optional[str] = None) -> bool:
         """
         Publish a message to the queue.
 
@@ -227,7 +221,8 @@ class RabbitMQProducer:
 
         except Exception as e:
             self.logger.error(
-                f"Failed to publish standardized message: {str(e)}",
+                "Failed to publish standardized message: %s",
+                {str(e)},
                 extra={"correlation_id": message.correlation_id},
             )
             # Try to reconnect for next message
@@ -349,9 +344,7 @@ class RabbitMQConsumer:
                 if retry_count < max_retries:
                     time.sleep(retry_delay)
                 else:
-                    self.logger.error(
-                        "Max retries reached. Could not connect to RabbitMQ."
-                    )
+                    self.logger.error("Max retries reached. Could not connect to RabbitMQ.")
                     return False
 
     def start_consuming(self, callback: Callable[[Dict[str, Any]], bool]) -> None:
