@@ -1,6 +1,6 @@
 .codebuddy/
 
-.vscode/
+.vscode
 
 pycaches/
 __pycache__/
@@ -27,4 +27,7 @@ __pycache__/
 *.DS_Store
 *.swp
 *.swo
-*.bak   
+*.bak
+.coverage
+*.coverage.*
+htmlcov

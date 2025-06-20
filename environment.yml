@@ -1,0 +1,19 @@
+name: ingestion
+dependencies:
+  - python=3.9
+  - fastapi
+  - uvicorn
+  - httpx
+  - elasticsearch
+  - pandas
+  - pypdf
+  - python-multipart
+  - python-json-logger
+  - python-dotenv
+  - numpy=1.21.0
+  - pip:
+    - python-docx
+    - pika
+    - pre-commit
+    - ruff
+    - isort
