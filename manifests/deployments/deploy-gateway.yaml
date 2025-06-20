@@ -1,14 +1,17 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  creationTimestamp: "2025-06-20T16:59:50Z"
+  annotations:
+    kubectl.kubernetes.io/last-applied-configuration: |
+      {"kind":"Deployment","apiVersion":"apps/v1","metadata":{"name":"gateway","namespace":"ingestion-ns","creationTimestamp":null,"labels":{"app":"gateway"}},"spec":{"replicas":2,"selector":{"matchLabels":{"app":"gateway"}},"template":{"metadata":{"creationTimestamp":null,"labels":{"app":"gateway"}},"spec":{"containers":[{"name":"agnhost","image":"registry.k8s.io/e2e-test-images/agnhost:2.39","ports":[{"containerPort":8000}],"resources":{}}]}},"strategy":{}},"status":{}}
+  creationTimestamp: "2025-06-20T20:34:08Z"
   generation: 1
   labels:
     app: gateway
   name: gateway
   namespace: ingestion-ns
-  resourceVersion: "121704"
-  uid: 778a7197-8f7a-4c13-bdd3-b8ca3605e048
+  resourceVersion: "125837"
+  uid: 5643477b-2c16-4a7d-9e92-347d2f5996ec
 spec:
   progressDeadlineSeconds: 600
   replicas: 2
