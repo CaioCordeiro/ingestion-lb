@@ -1,0 +1,64 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  creationTimestamp: null
+  labels:
+    app: ingestions
+  name: ingestions
+  namespace: ingestion-ns
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ingestions
+  strategy: {}
+  template:
+    metadata:
+      creationTimestamp: null
+      labels:
+        app: ingestions
+    spec:
+      containers:
+
+      - image: registry.k8s.io/e2e-test-images/agnhost:2.39
+        name: ingestion-text
+        ports:
+        - containerPort: 8001
+          name: http
+          protocol: TCP
+        - containerPort: 8011
+          name: metrics
+          protocol: TCP
+        resources: {}
+        
+      - image: registry.k8s.io/e2e-test-images/agnhost:2.39
+        name: ingestion-tabular
+        ports:
+        - containerPort: 8002
+          name: http
+          protocol: TCP
+        - containerPort: 8012
+          name: metrics
+          protocol: TCP
+        resources: {}
+      - image: registry.k8s.io/e2e-test-images/agnhost:2.39
+        name: ingestion-json
+        ports:
+        - containerPort: 8003
+          name: http
+          protocol: TCP
+        - containerPort: 8013
+          name: metrics
+          protocol: TCP
+        resources: {}
+      - image: registry.k8s.io/e2e-test-images/agnhost:2.39
+        name: ingestion-file
+        ports:
+        - containerPort: 8004
+          name: http
+          protocol: TCP
+        - containerPort: 8014
+          name: metrics
+          protocol: TCP
+        resources: {}
+status: {}

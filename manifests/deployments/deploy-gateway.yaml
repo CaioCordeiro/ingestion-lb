@@ -1,21 +1,21 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  creationTimestamp: "2025-06-19T18:13:26Z"
+  creationTimestamp: "2025-06-20T16:59:50Z"
   generation: 1
   labels:
-    app: data-api-gateway
-  name: data-api-gateway
-  namespace: default
-  resourceVersion: "114124"
-  uid: 52735624-6dae-436c-82e1-9eca591cf4a4
+    app: gateway
+  name: gateway
+  namespace: ingestion-ns
+  resourceVersion: "121704"
+  uid: 778a7197-8f7a-4c13-bdd3-b8ca3605e048
 spec:
   progressDeadlineSeconds: 600
-  replicas: 1
+  replicas: 2
   revisionHistoryLimit: 10
   selector:
     matchLabels:
-      app: data-api-gateway
+      app: gateway
   strategy:
     rollingUpdate:
       maxSurge: 25%
@@ -25,14 +25,14 @@ spec:
     metadata:
       creationTimestamp: null
       labels:
-        app: data-api-gateway
+        app: gateway
     spec:
       containers:
       - image: registry.k8s.io/e2e-test-images/agnhost:2.39
         imagePullPolicy: IfNotPresent
         name: agnhost
         ports:
-        - containerPort: 8080
+        - containerPort: 8000
           protocol: TCP
         resources: {}
         terminationMessagePath: /dev/termination-log

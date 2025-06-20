@@ -1,0 +1,32 @@
+apiVersion: v1
+kind: Service
+metadata:
+  creationTimestamp: "2025-06-20T17:15:11Z"
+  labels:
+    app: gateway-service
+  name: gateway-service
+  namespace: ingestion-ns
+  resourceVersion: "122023"
+  uid: 069eb500-7a00-4892-961d-10540dd6c493
+spec:
+  allocateLoadBalancerNodePorts: true
+  clusterIP: 10.43.40.87
+  clusterIPs:
+  - 10.43.40.87
+  externalTrafficPolicy: Cluster
+  internalTrafficPolicy: Cluster
+  ipFamilies:
+  - IPv4
+  ipFamilyPolicy: SingleStack
+  ports:
+  - name: 8000-8000
+    nodePort: 30929
+    port: 8000
+    protocol: TCP
+    targetPort: 8000
+  selector:
+    app: gateway-service
+  sessionAffinity: None
+  type: LoadBalancer
+status:
+  loadBalancer: {}
